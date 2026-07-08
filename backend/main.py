@@ -393,7 +393,7 @@ async def extract_records_from_pdf(pdf_bytes: bytes, target_wards: list[str] | N
     except Exception as e:
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
-        raise HTTPException(400, f"Invalid PDF file or unsupported .rpt format: {e}")
+        raise HTTPException(400, f"Invalid PDF file: {e}")
         
     if tmp_path and os.path.exists(tmp_path):
         os.remove(tmp_path)

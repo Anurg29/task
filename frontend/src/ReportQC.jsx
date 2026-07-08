@@ -144,7 +144,7 @@ export default function ReportQC() {
           <label className="file-upload-wrapper" style={{ padding: "20px" }}>
             <div className="upload-icon" style={{ fontSize: "1.5rem" }}>📄</div>
             <div style={{ fontSize: "0.9rem" }}>{reportFile ? reportFile.name : "Select PDF Report (.pdf)"}</div>
-            <input type="file" accept=".pdf,.rpt" onChange={e => setReportFile(e.target.files[0])} />
+            <input type="file" accept=".pdf" onChange={e => setReportFile(e.target.files[0])} />
           </label>
 
           {mode === "single" && (
