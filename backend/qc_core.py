@@ -277,6 +277,8 @@ def check_single(report_record: dict, excel_df: pd.DataFrame,
         return {
             "found_in_excel": False,
             "key": key_values,
+            "overall_result": "MISSING_IN_EXCEL",
+            "total_mismatches": 1,
             "message": (
                 f"No Excel row found for "
                 f"Ward={key_values.get('NewWardNo')!r}, "

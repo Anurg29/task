@@ -334,7 +334,7 @@ function BulkResult({ result }) {
           <details key={i} className="glass-card">
             <summary style={{ cursor: "pointer", padding: "16px", display: "flex", alignItems: "center", gap: "12px", outline: "none" }}>
               <strong style={{ minWidth: "140px" }}>{rec.key?.NewWardNo} / {rec.key?.NewPropertyNo}</strong>
-              <Badge status={rec.status} />
+              <Badge status={rec.overall_result} />
               <span style={{ color: "var(--text-muted)", fontSize: "0.9rem", marginLeft: "auto" }}>
                 {rec.total_mismatches ?? 0} issues
               </span>
