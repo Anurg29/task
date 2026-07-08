@@ -377,13 +377,15 @@ async def extract_records_from_pdf(pdf_bytes: bytes, target_wards: list[str] | N
             PROGRESS_STORE[client_id] = {"scanned": 0, "total": total_pages}
 
         with ProcessPoolExecutor() as executor:
-            tasks = {loop.run_in_executor(executor, worker_parse_pages, *chunk): chunk for chunk in chunks}
+            async def run_chunk(exec_ref, ch):
+                r = await loop.run_in_executor(exec_ref, worker_parse_pages, *ch)
+                return r, ch[2] - ch[1]
+
+            tasks = [run_chunk(executor, chunk) for chunk in chunks]
             
-            for f in asyncio.as_completed(tasks.keys()):
-                chunk = tasks[f]
-                res = await f
+            for f in asyncio.as_completed(tasks):
+                res, num_pages_in_chunk = await f
                 records.extend(res)
-                num_pages_in_chunk = chunk[2] - chunk[1]
                 completed_pages += num_pages_in_chunk
                 if client_id:
                     PROGRESS_STORE[client_id] = {"scanned": min(completed_pages, total_pages), "total": total_pages}
