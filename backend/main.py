@@ -283,7 +283,7 @@ def extract_record_from_page(page) -> dict:
                 record["TM_TaxTotal"] = None
 
         # Fallback: sum individual tax values
-        if not record.get("TM_TaxTotal"):
+        if record.get("TM_TaxTotal") is None:
             tax_sum = sum(v for v in [record.get(k) for k in TAX_ROW_MAP.values()] if v is not None)
             if tax_sum > 0:
                 record["TM_TaxTotal"] = round(tax_sum, 2)
@@ -377,12 +377,14 @@ async def extract_records_from_pdf(pdf_bytes: bytes, target_wards: list[str] | N
             PROGRESS_STORE[client_id] = {"scanned": 0, "total": total_pages}
 
         with ProcessPoolExecutor() as executor:
-            tasks = [loop.run_in_executor(executor, worker_parse_pages, *chunk) for chunk in chunks]
+            tasks = {loop.run_in_executor(executor, worker_parse_pages, *chunk): chunk for chunk in chunks}
             
-            for f in asyncio.as_completed(tasks):
+            for f in asyncio.as_completed(tasks.keys()):
+                chunk = tasks[f]
                 res = await f
                 records.extend(res)
-                completed_pages += CHUNK_SIZE
+                num_pages_in_chunk = chunk[2] - chunk[1]
+                completed_pages += num_pages_in_chunk
                 if client_id:
                     PROGRESS_STORE[client_id] = {"scanned": min(completed_pages, total_pages), "total": total_pages}
 

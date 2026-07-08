@@ -269,16 +269,15 @@ def find_excel_row(report_record: dict, excel_df: pd.DataFrame) -> pd.DataFrame:
             continue
 
         report_val_raw = report_record.get(key)
+        norm = normalize_key(report_val_raw)
 
         if key == "NewPartitionNo":
-            norm = normalize_key(report_val_raw)
+            excel_col_norm = excel_df[key].apply(normalize_key)
             if norm is None:
-                continue
+                mask &= excel_col_norm.isnull()
             else:
-                excel_col_norm = excel_df[key].apply(normalize_key)
                 mask &= excel_col_norm == norm
         else:
-            norm = normalize_key(report_val_raw)
             if norm is None:
                 continue
             excel_col_norm = excel_df[key].apply(normalize_key)
