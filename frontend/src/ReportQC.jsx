@@ -398,12 +398,9 @@ function BulkResult({ result }) {
 function formatExportData(records) {
   return records.map(rec => {
     const row = {};
-    let rowKey = rec.excel_identifiers?.OwnerID;
-    if (!rowKey || rowKey === "NOT_FOUND") {
-      rowKey = rec.key?.NewPropertyNo || rec.extracted_from_report?.NewPropertyNo || "UNKNOWN";
-    }
-
-    row["Owner ID"] = rowKey;
+    const ownerId = rec.excel_identifiers?.OwnerID;
+    
+    row["Owner ID"] = (ownerId && ownerId !== "NOT_FOUND") ? ownerId : "N/A";
     row["Ward No"] = rec.key?.NewWardNo || rec.extracted_from_report?.NewWardNo || "";
     row["Property No"] = rec.key?.NewPropertyNo || rec.extracted_from_report?.NewPropertyNo || "";
     row["Partition No"] = rec.key?.NewPartitionNo || rec.extracted_from_report?.NewPartitionNo || "";
