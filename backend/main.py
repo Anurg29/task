@@ -22,10 +22,21 @@ from fastapi import WebSocket, WebSocketDisconnect
 import pdfplumber
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 
 from qc_core import check_single, COLUMN_TYPES, KEY_COLUMNS, rename_excel_columns
 
-app = FastAPI(title="Report vs Excel QC API")
+shared_executor = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global shared_executor
+    shared_executor = ProcessPoolExecutor(max_workers=2)
+    yield
+    if shared_executor:
+        shared_executor.shutdown(wait=True)
+
+app = FastAPI(title="Report vs Excel QC API", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 STATE = {"excel_df": None, "sheet_name": None}
@@ -376,19 +387,18 @@ async def extract_records_from_pdf(pdf_bytes: bytes, target_wards: list[str] | N
         if client_id:
             PROGRESS_STORE[client_id] = {"scanned": 0, "total": total_pages}
 
-        with ProcessPoolExecutor() as executor:
-            async def run_chunk(exec_ref, ch):
-                r = await loop.run_in_executor(exec_ref, worker_parse_pages, *ch)
-                return r, ch[2] - ch[1]
+        async def run_chunk(exec_ref, ch):
+            r = await loop.run_in_executor(exec_ref, worker_parse_pages, *ch)
+            return r, ch[2] - ch[1]
 
-            tasks = [run_chunk(executor, chunk) for chunk in chunks]
-            
-            for f in asyncio.as_completed(tasks):
-                res, num_pages_in_chunk = await f
-                records.extend(res)
-                completed_pages += num_pages_in_chunk
-                if client_id:
-                    PROGRESS_STORE[client_id] = {"scanned": min(completed_pages, total_pages), "total": total_pages}
+        tasks = [run_chunk(shared_executor, chunk) for chunk in chunks]
+        
+        for f in asyncio.as_completed(tasks):
+            res, num_pages_in_chunk = await f
+            records.extend(res)
+            completed_pages += num_pages_in_chunk
+            if client_id:
+                PROGRESS_STORE[client_id] = {"scanned": min(completed_pages, total_pages), "total": total_pages}
 
     except Exception as e:
         if tmp_path and os.path.exists(tmp_path):
