@@ -404,7 +404,7 @@ function formatExportData(records) {
     row["Ward No"] = rec.key?.NewWardNo || rec.extracted_from_report?.NewWardNo || "";
     row["Property No"] = rec.key?.NewPropertyNo || rec.extracted_from_report?.NewPropertyNo || "";
     row["Partition No"] = rec.key?.NewPartitionNo || rec.extracted_from_report?.NewPartitionNo || "";
-    row["Overall Result"] = rec.status;
+    row["Overall Result"] = rec.overall_result;
 
     if (!rec.found_in_excel) {
       if (rec.extracted_from_report) {
