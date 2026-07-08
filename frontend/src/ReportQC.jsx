@@ -105,9 +105,9 @@ export default function ReportQC() {
 
   return (
     <div className="app-container animate-fade-in">
-      <header className="header">
-        <h1>Report vs Excel QC</h1>
-        <p>
+      <header className="header animate-fade-in">
+        <h1>TaxQC Pro</h1>
+        <p style={{ color: "var(--text-muted)", marginTop: "12px", lineHeight: "1.6" }}>
           Upload your master Excel database and the PDF report. The system automatically reconciles 
           all 23 tax columns using <strong>Ward No + Property No</strong> as the primary key.
         </p>
