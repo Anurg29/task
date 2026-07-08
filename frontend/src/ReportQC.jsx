@@ -1,5 +1,6 @@
 import { useState } from "react";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
+import { saveAs } from "file-saver";
 import jsPDF from "jspdf";
 import "jspdf-autotable";
 
@@ -432,16 +433,52 @@ function formatExportData(records) {
   });
 }
 
-function exportDiscrepanciesExcel(records) {
+async function exportDiscrepanciesExcel(records) {
   const data = formatExportData(records);
   if (data.length === 0) {
     alert("No records to export!");
     return;
   }
-  const ws = XLSX.utils.json_to_sheet(data);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "QC Report");
-  XLSX.writeFile(wb, "Report_QC_Results.xlsx");
+  
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("QC Report");
+  
+  if (data.length > 0) {
+    const columns = Object.keys(data[0]).map(key => ({ header: key, key: key, width: 20 }));
+    worksheet.columns = columns;
+    
+    // Style Header
+    worksheet.getRow(1).eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } }; // Indigo
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+    });
+
+    // Add rows and style mismatches
+    data.forEach(rowData => {
+      const row = worksheet.addRow(rowData);
+      row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+        const colHeader = columns[colNumber - 1].header;
+        const val = cell.value;
+        
+        if (colHeader.includes("Result") || colHeader.includes("Status") || colHeader.includes("Issue Type")) {
+           if (val === "MATCH" || val === "OK") {
+             cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD1FAE5' } }; // Light Green
+             cell.font = { color: { argb: 'FF065F46' }, bold: true };
+           } else if (val === "MINOR_TYPO") {
+             cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF08A' } }; // Light Yellow
+             cell.font = { color: { argb: 'FF854D0E' }, bold: true };
+           } else {
+             cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } }; // Light Red
+             cell.font = { color: { argb: 'FF991B1B' }, bold: true };
+           }
+        }
+      });
+    });
+  }
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  saveAs(new Blob([buffer]), "Report_QC_Results.xlsx");
 }
 
 function exportDiscrepanciesPDF(records) {
