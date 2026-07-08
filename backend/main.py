@@ -11,6 +11,14 @@ Logic:
 import io
 import re
 import pandas as pd
+
+import tempfile
+import os
+import math
+import asyncio
+from concurrent.futures import ProcessPoolExecutor
+from fastapi import WebSocket, WebSocketDisconnect
+
 import pdfplumber
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +29,52 @@ app = FastAPI(title="Report vs Excel QC API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 STATE = {"excel_df": None, "sheet_name": None}
+
+PROGRESS_STORE = {}
+
+@app.websocket("/ws/progress/{client_id}")
+async def websocket_endpoint(websocket: WebSocket, client_id: str):
+    await websocket.accept()
+    PROGRESS_STORE[client_id] = {"scanned": 0, "total": 1}
+    try:
+        while True:
+            await asyncio.sleep(0.5)
+            data = PROGRESS_STORE.get(client_id)
+            if data:
+                await websocket.send_json(data)
+                if data.get("scanned", 0) >= data.get("total", 1):
+                    break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        PROGRESS_STORE.pop(client_id, None)
+
+def worker_parse_pages(pdf_path: str, start_page: int, end_page: int, target_wards: list, is_ledger: bool) -> list:
+    records = []
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            for i in range(start_page, end_page):
+                page = pdf.pages[i]
+                if is_ledger:
+                    tbls = page.extract_tables() or []
+                    for r in extract_ledger_records(tbls):
+                        if target_wards:
+                            w = str(r.get("NewWardNo", "")).strip().upper()
+                            if w not in target_wards:
+                                continue
+                        records.append(r)
+                else:
+                    rec = extract_record_from_page(page)
+                    if rec.get("NewWardNo") or rec.get("NewPropertyNo"):
+                        if target_wards:
+                            w = str(rec.get("NewWardNo", "")).strip().upper()
+                            if w not in target_wards:
+                                continue
+                        records.append(rec)
+    except Exception:
+        pass
+    return records
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -287,15 +341,22 @@ def extract_ledger_records(tables) -> list[dict]:
     return records
 
 
-def extract_records_from_pdf(pdf_bytes: bytes) -> list[dict]:
-    """Extract records from a multi-page PDF, auto-detecting format."""
+async def extract_records_from_pdf(pdf_bytes: bytes, target_wards: list[str] | None = None, client_id: str | None = None) -> list[dict]:
+    """Extract records from a multi-page PDF using multiprocessing."""
     records = []
+    tmp_path = None
     try:
-        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            if not pdf.pages:
+        # Write bytes to temp file for worker processes
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(pdf_bytes)
+            tmp_path = tmp.name
+
+        with pdfplumber.open(tmp_path) as pdf:
+            total_pages = len(pdf.pages)
+            if total_pages == 0:
+                os.remove(tmp_path)
                 return []
                 
-            # Auto-detect format from first page
             first_page_tables = pdf.pages[0].extract_tables() or []
             is_ledger = False
             for tbl in first_page_tables:
@@ -304,27 +365,44 @@ def extract_records_from_pdf(pdf_bytes: bytes) -> list[dict]:
                     if "नपवनवमरर" in headers or "नपवन वमरर" in headers:
                         is_ledger = True
                         break
+
+        CHUNK_SIZE = 25  # Process 25 pages per worker
+        chunks = []
+        for i in range(0, total_pages, CHUNK_SIZE):
+            chunks.append((tmp_path, i, min(i + CHUNK_SIZE, total_pages), target_wards, is_ledger))
+
+        loop = asyncio.get_running_loop()
+        completed_pages = 0
+        if client_id:
+            PROGRESS_STORE[client_id] = {"scanned": 0, "total": total_pages}
+
+        with ProcessPoolExecutor() as executor:
+            tasks = [loop.run_in_executor(executor, worker_parse_pages, *chunk) for chunk in chunks]
             
-            if is_ledger:
-                for page in pdf.pages:
-                    tbls = page.extract_tables() or []
-                    records.extend(extract_ledger_records(tbls))
-            else:
-                for page in pdf.pages:
-                    rec = extract_record_from_page(page)
-                    if rec.get("NewWardNo") or rec.get("NewPropertyNo"):
-                        records.append(rec)
+            for f in asyncio.as_completed(tasks):
+                res = await f
+                records.extend(res)
+                completed_pages += CHUNK_SIZE
+                if client_id:
+                    PROGRESS_STORE[client_id] = {"scanned": min(completed_pages, total_pages), "total": total_pages}
+
     except Exception as e:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
         raise HTTPException(400, f"Invalid PDF file or unsupported .rpt format: {e}")
+        
+    if tmp_path and os.path.exists(tmp_path):
+        os.remove(tmp_path)
+        
     return records
 
 
-def extract_record_from_pdf(pdf_bytes: bytes,
+async def extract_record_from_pdf(pdf_bytes: bytes,
                              override_ward: str | None = None,
                              override_prop: str | None = None,
                              override_partition: str | None = None) -> dict:
     try:
-        records = extract_records_from_pdf(pdf_bytes)
+        records = await extract_records_from_pdf(pdf_bytes)
         if not records:
              raise ValueError("No valid property records found in PDF")
         
@@ -365,7 +443,7 @@ async def qc_check_single(
     partition_no: str | None = Form(None),
 ):
     pdf_bytes = await file.read()
-    report_record = extract_record_from_pdf(
+    report_record = await extract_record_from_pdf(
         pdf_bytes,
         override_ward=ward_no,
         override_prop=prop_no,
@@ -391,13 +469,47 @@ async def qc_check_single(
     return result
 
 
+def expand_ward_ranges(ward_str: str) -> list[str]:
+    if not ward_str:
+        return []
+    
+    parts = [p.strip() for p in ward_str.split(",") if p.strip()]
+    final_wards = []
+    
+    for part in parts:
+        if "-" in part:
+            subparts = [s.strip() for s in part.split("-")]
+            if len(subparts) == 2:
+                start_w, end_w = subparts[0].upper(), subparts[1].upper()
+                m1 = re.match(r"^([A-Z]+)(\d+)$", start_w)
+                m2 = re.match(r"^([A-Z]+)(\d+)$", end_w)
+                if m1 and m2 and m1.group(1) == m2.group(1):
+                    prefix = m1.group(1)
+                    start_num = int(m1.group(2))
+                    end_num = int(m2.group(2))
+                    
+                    step = 1 if start_num <= end_num else -1
+                    for n in range(start_num, end_num + step, step):
+                        final_wards.append(f"{prefix}{n}")
+                    continue
+        
+        final_wards.append(part.upper())
+    return final_wards
+
 @app.post("/qc/check-bulk")
-async def qc_check_bulk(file: UploadFile = File(...)):
+async def qc_check_bulk(
+    file: UploadFile = File(...),
+    target_wards: str | None = Form(None),
+    client_id: str | None = Form(None)
+):
     pdf_bytes = await file.read()
-    records = extract_records_from_pdf(pdf_bytes)
+    
+    wards_list = expand_ward_ranges(target_wards) if target_wards else None
+
+    records = await extract_records_from_pdf(pdf_bytes, target_wards=wards_list, client_id=client_id)
 
     if not records:
-        raise HTTPException(422, "Could not extract any property records from the PDF.")
+        raise HTTPException(422, "Could not extract any property records from the PDF (or none matched the ward filter).")
 
     excel_df = get_excel_df()
     all_results = []

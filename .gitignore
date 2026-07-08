@@ -1,0 +1,19 @@
+# Ignore data files
+*.pdf
+*.xlsx
+*.xls
+*.csv
+
+# Ignore python cache
+__pycache__/
+*.pyc
+
+# Ignore temp folders
+.venv/
+venv/
+env/
+.DS_Store
+
+# Node/React ignores are usually in frontend/.gitignore, but just in case
+node_modules/
+dist/

@@ -210,10 +210,14 @@ def values_match(report_val, excel_val, col_type: str):
             return str(report_val) == str(excel_val), "VALUE_MISMATCH"
 
     if col_type == "text":
+        if report_val == excel_val:
+            return True, "MATCH"
         score = fuzz.ratio(str(report_val), str(excel_val))
-        return score >= FUZZY_TEXT_THRESHOLD, "VALUE_MISMATCH"
+        if score >= FUZZY_TEXT_THRESHOLD:
+            return False, "MINOR_TYPO"
+        return False, "VALUE_MISMATCH"
 
-    return report_val == excel_val, "VALUE_MISMATCH"
+    return report_val == excel_val, "MATCH" if report_val == excel_val else "VALUE_MISMATCH"
 
 
 # ---------------------------------------------------------------------------

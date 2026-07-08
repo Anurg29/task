@@ -3,25 +3,21 @@ import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import "jspdf-autotable";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 // ─── Status badge colours ───────────────────────────────────────────────────
 const STATUS_COLOR = {
-  MATCH:              { bg: "#d4edda", text: "#155724" },
-  VALUE_MISMATCH:     { bg: "#f8d7da", text: "#721c24" },
-  MISSING_IN_REPORT:  { bg: "#fff3cd", text: "#856404" },
-  MISSING_IN_EXCEL:   { bg: "#d1ecf1", text: "#0c5460" },
-  NOT_FOUND:          { bg: "#f8d7da", text: "#721c24" },
+  MATCH:              { bg: "var(--success-bg)", text: "var(--success)" },
+  VALUE_MISMATCH:     { bg: "var(--error-bg)", text: "var(--error)" },
+  MISSING_IN_REPORT:  { bg: "var(--warning-bg)", text: "var(--warning)" },
+  MISSING_IN_EXCEL:   { bg: "rgba(14, 165, 233, 0.2)", text: "#0ea5e9" },
+  NOT_FOUND:          { bg: "var(--error-bg)", text: "var(--error)" },
 };
 
 function Badge({ status }) {
-  const c = STATUS_COLOR[status] || { bg: "#e2e3e5", text: "#383d41" };
+  const c = STATUS_COLOR[status] || { bg: "rgba(0,0,0,0.1)", text: "var(--text-muted)" };
   return (
-    <span style={{
-      background: c.bg, color: c.text,
-      padding: "2px 8px", borderRadius: 12,
-      fontSize: 12, fontWeight: 600,
-    }}>
+    <span className="badge" style={{ background: c.bg, color: c.text }}>
       {status}
     </span>
   );
@@ -34,9 +30,14 @@ export default function ReportQC() {
   const [wardNo, setWardNo]       = useState("");
   const [propNo, setPropNo]       = useState("");
   const [partitionNo, setPartitionNo] = useState("");
+  const [targetWards, setTargetWards] = useState(""); // For bulk mode filtering
   const [result, setResult]       = useState(null);
   const [loading, setLoading]     = useState(false);
   const [error, setError]         = useState(null);
+
+  // Progress tracking
+  const [progressMsg, setProgressMsg] = useState("");
+  const [progressPct, setProgressPct] = useState(0);
 
   async function runCheck() {
     if (!excelFile || !reportFile) {
@@ -46,8 +47,28 @@ export default function ReportQC() {
     setLoading(true);
     setError(null);
     setResult(null);
+    setProgressMsg("Starting scan...");
+    setProgressPct(0);
+
+    let ws = null;
+    let clientId = null;
 
     try {
+      if (mode === "bulk") {
+        clientId = Math.random().toString(36).substring(2, 15);
+        const wsProtocol = API_BASE.startsWith("https") ? "wss" : "ws";
+        const wsHost = API_BASE.replace(/^https?:\/\//, "");
+        ws = new WebSocket(`${wsProtocol}://${wsHost}/ws/progress/${clientId}`);
+        ws.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          const scanned = data.scanned || 0;
+          const total = data.total || 1;
+          const pct = Math.round((scanned / total) * 100);
+          setProgressPct(pct);
+          setProgressMsg(`Scanning Page ${scanned} of ${total}... ${pct}% Completed`);
+        };
+      }
+
       // Step 1 — upload Excel
       const ef = new FormData();
       ef.append("file", excelFile);
@@ -63,6 +84,9 @@ export default function ReportQC() {
         if (propNo)      rf.append("prop_no",      propNo);
         // Always send partition_no (empty string = no partition = NaN match)
         rf.append("partition_no", partitionNo);
+      } else if (mode === "bulk") {
+        if (targetWards) rf.append("target_wards", targetWards);
+        if (clientId)    rf.append("client_id", clientId);
       }
 
       const endpoint = mode === "single" ? "/qc/check-single" : "/qc/check-bulk";
@@ -74,134 +98,133 @@ export default function ReportQC() {
     } catch (e) {
       setError(e.message);
     } finally {
+      if (ws) ws.close();
       setLoading(false);
     }
   }
 
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 16px", fontFamily: "system-ui, sans-serif" }}>
-      <h2 style={{ marginBottom: 4 }}>Report vs Excel QC Check</h2>
-      <p style={{ color: "#666", marginTop: 0 }}>
-        Upload the master Excel and the report PDF. The system looks up each property by
-        <strong> Ward No + Property No</strong> and compares all 23 columns.
-      </p>
+    <div className="app-container animate-fade-in">
+      <header className="header">
+        <h1>Report vs Excel QC</h1>
+        <p>
+          Upload your master Excel database and the PDF report. The system automatically reconciles 
+          all 23 tax columns using <strong>Ward No + Property No</strong> as the primary key.
+        </p>
+      </header>
 
       {/* ── Upload form ── */}
-      <section style={{ border: "1px solid #ddd", borderRadius: 8, padding: 20, marginBottom: 20 }}>
+      <section className="glass-panel upload-section">
         {/* Excel */}
-        <div style={{ marginBottom: 16 }}>
-          <h3 style={{ margin: "0 0 8px" }}>1. Master Excel</h3>
-          <input type="file" id="excel-input" accept=".xlsx,.xls"
-            onChange={e => setExcelFile(e.target.files[0])} />
+        <div className="upload-card">
+          <h3>📊 1. Master Excel</h3>
+          <label className="file-upload-wrapper">
+            <div className="upload-icon">📁</div>
+            <div>{excelFile ? excelFile.name : "Click or drag Excel file (.xlsx)"}</div>
+            <input type="file" accept=".xlsx,.xls" onChange={e => setExcelFile(e.target.files[0])} />
+          </label>
         </div>
 
-        {/* Mode */}
-        <div style={{ marginBottom: 16 }}>
-          <h3 style={{ margin: "0 0 8px" }}>2. Check type</h3>
-          <label style={{ marginRight: 20 }}>
-            <input type="radio" checked={mode === "single"} onChange={() => setMode("single")} /> Single Property
-          </label>
-          <label>
-            <input type="radio" checked={mode === "bulk"} onChange={() => setMode("bulk")} /> Bulk (multi-page PDF)
+        {/* PDF & Controls */}
+        <div className="upload-card">
+          <h3>📑 2. Report PDF & Mode</h3>
+          
+          <div className="mode-selector">
+            <label className={`mode-radio ${mode === "single" ? "active" : ""}`}>
+              <input type="radio" checked={mode === "single"} onChange={() => setMode("single")} /> 
+              Single Property
+            </label>
+            <label className={`mode-radio ${mode === "bulk" ? "active" : ""}`}>
+              <input type="radio" checked={mode === "bulk"} onChange={() => setMode("bulk")} /> 
+              Bulk (multi-page)
+            </label>
+          </div>
+
+          <label className="file-upload-wrapper" style={{ padding: "20px" }}>
+            <div className="upload-icon" style={{ fontSize: "1.5rem" }}>📄</div>
+            <div style={{ fontSize: "0.9rem" }}>{reportFile ? reportFile.name : "Select PDF Report (.pdf)"}</div>
+            <input type="file" accept=".pdf,.rpt" onChange={e => setReportFile(e.target.files[0])} />
           </label>
 
           {mode === "single" && (
-            <div style={{ marginTop: 12 }}>
-              <p style={{ margin: "0 0 8px", fontSize: 13, color: "#555" }}>
-                These 3 fields are the <strong>lookup key</strong> — the system finds the Excel row by matching all three.
-                Leave blank to auto-read from the PDF.
-              </p>
-              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                <div>
-                  <label style={{ display: "block", fontSize: 12, color: "#555", marginBottom: 3 }}>Ward No</label>
-                  <input id="ward-no-input" type="text" value={wardNo}
-                    onChange={e => setWardNo(e.target.value)}
-                    placeholder="e.g. D10"
-                    style={{ padding: "6px 10px", width: 110, border: "1px solid #ccc", borderRadius: 4 }} />
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: 12, color: "#555", marginBottom: 3 }}>New Property No</label>
-                  <input id="prop-no-input" type="text" value={propNo}
-                    onChange={e => setPropNo(e.target.value)}
-                    placeholder="e.g. 2465"
-                    style={{ padding: "6px 10px", width: 120, border: "1px solid #ccc", borderRadius: 4 }} />
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: 12, color: "#555", marginBottom: 3 }}>New Partition No <em style={{fontWeight:400}}>(blank = none)</em></label>
-                  <input id="partition-no-input" type="text" value={partitionNo}
-                    onChange={e => setPartitionNo(e.target.value)}
-                    placeholder="e.g. 1  (or blank)"
-                    style={{ padding: "6px 10px", width: 140, border: "1px solid #ccc", borderRadius: 4 }} />
-                </div>
-              </div>
+            <div className="single-mode-inputs animate-fade-in">
+              <input className="input-modern" type="text" value={wardNo}
+                onChange={e => setWardNo(e.target.value)} placeholder="Ward (e.g. D10)" />
+              <input className="input-modern" type="text" value={propNo}
+                onChange={e => setPropNo(e.target.value)} placeholder="Property (e.g. 2465)" />
+              <input className="input-modern" type="text" value={partitionNo}
+                onChange={e => setPartitionNo(e.target.value)} placeholder="Partition (opt)" />
+            </div>
+          )}
+
+          {mode === "bulk" && (
+            <div className="single-mode-inputs animate-fade-in">
+              <input className="input-modern" type="text" value={targetWards}
+                onChange={e => setTargetWards(e.target.value)} 
+                placeholder="Filter by Wards (e.g. A1, A2 or A1-A10)" 
+                style={{ width: "100%" }} />
             </div>
           )}
         </div>
-
-        {/* PDF */}
-        <div style={{ marginBottom: 20 }}>
-          <h3 style={{ margin: "0 0 8px" }}>3. Report PDF / RPT</h3>
-          <input type="file" id="pdf-input" accept=".pdf,.rpt"
-            onChange={e => setReportFile(e.target.files[0])} />
-        </div>
-
-        <button id="run-qc-btn" onClick={runCheck}
-          disabled={!excelFile || !reportFile || loading}
-          style={{
-            padding: "10px 28px", fontSize: 15, background: "#4472C4",
-            color: "white", border: "none", borderRadius: 6, cursor: "pointer",
-          }}>
-          {loading ? "Processing…" : "▶ Run QC Check"}
-        </button>
       </section>
 
       {error && (
-        <div style={{ background: "#f8d7da", border: "1px solid #f5c2c7", borderRadius: 6,
-          padding: "12px 16px", color: "#842029", marginBottom: 16 }}>
-          ⚠ {error}
+        <div className="error-banner animate-fade-in">
+          <span style={{ fontSize: "1.2rem" }}>⚠️</span>
+          <span>{error}</span>
         </div>
       )}
 
+      <div className="action-row">
+        <button className="btn-primary run-btn" onClick={runCheck} disabled={loading}>
+          {loading ? (
+            <span className="spinner"></span>
+          ) : "▶ Run QC Check"}
+        </button>
+      </div>
+
       {/* ── Results ── */}
-      {result && result.mode === "single" && <SingleResult result={result} />}
-      {result && result.mode === "bulk"   && <BulkResult result={result} />}
+      {result && (
+        <div className="results-container glass-panel animate-fade-in" style={{ padding: "32px" }}>
+          {result.mode === "single" ? <SingleResult result={result} /> : <BulkResult result={result} />}
+        </div>
+      )}
     </div>
   );
 }
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Single result panel
 // ─────────────────────────────────────────────────────────────────────────────
 function SingleResult({ result }) {
   const exportButtons = (
-    <div style={{ marginTop: 24, textAlign: "right", display: "flex", gap: "12px", justifyContent: "flex-end" }}>
-      <button onClick={() => exportDiscrepanciesExcel([result])}
-        style={{ padding: "8px 16px", background: "#217346", color: "white", border: "none", borderRadius: 4, cursor: "pointer" }}>
-        📥 Export to Excel (.xlsx)
+    <div style={{ marginTop: 32, display: "flex", gap: "16px", justifyContent: "flex-end" }}>
+      <button className="btn-primary" onClick={() => exportDiscrepanciesExcel([result])}
+        style={{ background: "linear-gradient(135deg, #10b981, #059669)" }}>
+        📥 Export Excel
       </button>
-      <button onClick={() => exportDiscrepanciesPDF([result])}
-        style={{ padding: "8px 16px", background: "#d93025", color: "white", border: "none", borderRadius: 4, cursor: "pointer" }}>
-        📥 Export to PDF
+      <button className="btn-primary" onClick={() => exportDiscrepanciesPDF([result])}
+        style={{ background: "linear-gradient(135deg, #ef4444, #dc2626)" }}>
+        📥 Export PDF
       </button>
     </div>
   );
 
   if (!result.found_in_excel) {
     return (
-      <div style={{ background: "#fff3cd", border: "1px solid #ffc107", borderRadius: 6, padding: 16 }}>
-        <h3 style={{ margin: "0 0 8px 0", color: "#856404" }}>⚠️ Not found in Excel</h3>
-        <p style={{ margin: "0 0 16px 0", color: "#856404" }}>{result.message}</p>
+      <div className="animate-fade-in">
+        <h3 style={{ color: "var(--warning)", marginBottom: "8px" }}>⚠️ Not found in Excel</h3>
+        <p style={{ marginBottom: "24px" }}>{result.message}</p>
         
-        <div style={{ fontSize: 13, color: "#333", padding: "12px", background: "#ffffff", borderRadius: "6px", border: "1px solid #e9ecef" }}>
-          <h4 style={{ margin: "0 0 12px 0", color: "#4472C4" }}>Data Extracted from PDF (Cannot find matching Excel row)</h4>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: "12px" }}>
+        <div className="glass-card" style={{ padding: "20px", marginBottom: "24px" }}>
+          <h4 style={{ margin: "0 0 16px 0", color: "var(--primary)" }}>Data Extracted from PDF</h4>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: "16px" }}>
             {result.extracted_from_report 
               ? Object.entries(result.extracted_from_report).map(([key, value]) => (
-                  <div key={key} style={{ background: "#f8f9fa", padding: "8px", borderRadius: "4px", border: "1px solid #eee" }}>
-                    <strong style={{ color: "#555", fontSize: "11px", textTransform: "uppercase" }}>{key}</strong>
-                    <div style={{ marginTop: "4px", wordBreak: "break-word" }}>
-                      {value !== null && value !== undefined && value !== "" ? String(value) : <em style={{color: "#aaa"}}>N/A</em>}
+                  <div key={key}>
+                    <div style={{ fontSize: "0.75rem", textTransform: "uppercase", color: "var(--text-muted)", marginBottom: "4px" }}>{key}</div>
+                    <div style={{ fontWeight: "500" }}>
+                      {value !== null && value !== undefined && value !== "" ? String(value) : <em style={{opacity: 0.5}}>N/A</em>}
                     </div>
                   </div>
                 ))
@@ -210,23 +233,8 @@ function SingleResult({ result }) {
           </div>
         </div>
 
-        <div style={{ marginTop: 16, background: "white", padding: 12, borderRadius: 6, border: "1px solid #e9ecef" }}>
-          <FieldTable rows={
-            result.extracted_from_report && Object.keys(result.extracted_from_report).length > 0
-              ? Object.entries(result.extracted_from_report).map(([k, v]) => ({
-                  field: k,
-                  report_value: v !== null && v !== undefined && v !== "" ? String(v) : "MISSING",
-                  excel_value: "MISSING",
-                  status: "ROW_MISSING_IN_EXCEL"
-                }))
-              : [{
-                  field: "(entire row)",
-                  report_value: "Present",
-                  excel_value: "MISSING",
-                  status: "ROW_MISSING_IN_EXCEL"
-                }]
-          } 
-          rowKey={result.extracted_from_report?.NewPropertyNo || "UNKNOWN"} />
+        <div className="table-container">
+          <FieldTable records={[result]} />
         </div>
         
         {exportButtons}
@@ -238,181 +246,178 @@ function SingleResult({ result }) {
   const mismatches = result.results?.filter(r => r.status !== "MATCH") ?? [];
 
   return (
-    <section>
+    <section className="animate-fade-in">
       {/* Summary bar */}
-      <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
-        <SummaryCard label="Total Fields Checked" value={result.total_fields_checked} color="#4472C4" />
-        <SummaryCard label="Matching"   value={matches.length}    color="#28a745" />
-        <SummaryCard label="Mismatches" value={mismatches.length} color="#dc3545" />
-        <SummaryCard label="Overall"    value={result.status}     color={result.status === "MATCH" ? "#28a745" : "#dc3545"} />
+      <div className="summary-cards">
+        <div className="glass-card summary-card">
+          <div className="value" style={{ color: "var(--primary)" }}>{result.total_fields_checked}</div>
+          <div className="label">Fields Checked</div>
+        </div>
+        <div className="glass-card summary-card">
+          <div className="value" style={{ color: "var(--success)" }}>{matches.length}</div>
+          <div className="label">Matching</div>
+        </div>
+        <div className="glass-card summary-card">
+          <div className="value" style={{ color: "var(--error)" }}>{mismatches.length}</div>
+          <div className="label">Mismatches</div>
+        </div>
       </div>
 
       {/* Key used for lookup & Excel identifiers */}
-      <div style={{ fontSize: 13, color: "#333", marginBottom: 16, padding: "12px", background: "#f8f9fa", borderRadius: "6px", border: "1px solid #e9ecef" }}>
-        <h4 style={{ margin: "0 0 8px 0", color: "#4472C4" }}>Property Identification</h4>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px" }}>
-          <div><strong>Correct Owner ID:</strong> <br/>{result.excel_identifiers?.OwnerID || "N/A"}</div>
-          <div><strong>Property No:</strong> <br/>{result.key?.NewPropertyNo}</div>
-          <div><strong>Ward No:</strong> <br/>{result.key?.NewWardNo}</div>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", marginTop: "8px", color: "#666" }}>
-          <div><strong>Assessment ID:</strong> <br/>{result.excel_identifiers?.AssesmentID || "N/A"}</div>
-          <div><strong>Partition No:</strong> <br/>{result.key?.NewPartitionNo || "none"}</div>
-          <div><strong>Old Property No:</strong> <br/>{result.excel_identifiers?.OldPropertyNo || "N/A"}</div>
+      <div className="glass-card" style={{ padding: "20px", marginBottom: "32px" }}>
+        <h4 style={{ margin: "0 0 16px 0", color: "var(--primary)" }}>Property Identification</h4>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "16px" }}>
+          <div>
+            <div style={{ fontSize: "0.75rem", textTransform: "uppercase", color: "var(--text-muted)" }}>Owner ID</div>
+            <div style={{ fontWeight: "500" }}>{result.excel_identifiers?.OwnerID || "N/A"}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: "0.75rem", textTransform: "uppercase", color: "var(--text-muted)" }}>Property No</div>
+            <div style={{ fontWeight: "500" }}>{result.key?.NewPropertyNo}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: "0.75rem", textTransform: "uppercase", color: "var(--text-muted)" }}>Ward No</div>
+            <div style={{ fontWeight: "500" }}>{result.key?.NewWardNo}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: "0.75rem", textTransform: "uppercase", color: "var(--text-muted)" }}>Assessment ID</div>
+            <div style={{ fontWeight: "500" }}>{result.excel_identifiers?.AssesmentID || "N/A"}</div>
+          </div>
         </div>
       </div>
 
-      {/* Mismatch table — only show if there are issues */}
-      {mismatches.length > 0 ? (
-        <>
-          <h3 style={{ color: "#dc3545" }}>❌ Mismatched Fields ({mismatches.length})</h3>
-          <FieldTable rows={mismatches} rowKey={result.excel_identifiers?.OwnerID || result.key?.NewPropertyNo || "UNKNOWN"} />
-        </>
-      ) : (
-        <h3 style={{ color: "#28a745" }}>✅ All fields matched perfectly!</h3>
-      )}
-
-      {/* Full comparison table (collapsed by default to compress UI) */}
-      <details style={{ marginTop: 24, border: "1px solid #ddd", borderRadius: 6, padding: 12 }}>
-        <summary style={{ cursor: "pointer", fontSize: "1.1em", fontWeight: "bold" }}>
-          📋 Full Field Comparison ({result.results?.length} fields)
-        </summary>
-        <div style={{ marginTop: 12 }}>
-          <FieldTable rows={result.results ?? []} rowKey={result.excel_identifiers?.OwnerID || result.key?.NewPropertyNo || "UNKNOWN"} />
-        </div>
-      </details>
+      {/* Mismatch table */}
+      <div style={{ marginBottom: "24px" }}>
+        {mismatches.length > 0 ? (
+          <>
+            <h3 style={{ color: "var(--error)", marginBottom: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
+              ❌ Property Details ({mismatches.length} Mismatches)
+            </h3>
+            <div className="table-container">
+              <FieldTable records={[result]} />
+            </div>
+          </>
+        ) : (
+          <div className="glass-card" style={{ padding: "24px", textAlign: "center" }}>
+            <h3 style={{ color: "var(--success)", margin: 0 }}>✨ All fields matched perfectly!</h3>
+            <div className="table-container" style={{ marginTop: "24px" }}>
+              <FieldTable records={[result]} />
+            </div>
+          </div>
+        )}
+      </div>
       
       {exportButtons}
     </section>
   );
 }
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Bulk result panel
 // ─────────────────────────────────────────────────────────────────────────────
 function BulkResult({ result }) {
   return (
-    <section>
-      <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
-        <SummaryCard label="Properties Checked" value={result.total_records}    color="#4472C4" />
-        <SummaryCard label="Total Mismatches"   value={result.total_mismatches} color="#dc3545" />
+    <section className="animate-fade-in">
+      <div className="summary-cards">
+        <div className="glass-card summary-card">
+          <div className="value" style={{ color: "var(--primary)" }}>{result.total_records}</div>
+          <div className="label">Properties Parsed</div>
+        </div>
+        <div className="glass-card summary-card">
+          <div className="value" style={{ color: "var(--error)" }}>{result.total_mismatches}</div>
+          <div className="label">Total Mismatches Found</div>
+        </div>
       </div>
 
-      {result.records?.map((rec, i) => (
-        <details key={i} style={{ border: "1px solid #ddd", borderRadius: 6, marginBottom: 8, padding: 12 }}>
-          <summary style={{ cursor: "pointer", fontWeight: 600 }}>
-            {rec.key?.NewWardNo} / {rec.key?.NewPropertyNo} &nbsp;—&nbsp;
-            <span style={{ color: rec.status === "MATCH" ? "#28a745" : "#dc3545" }}>
-              {rec.status}
-            </span>
-            {" "}({rec.total_mismatches ?? 0} issues)
-          </summary>
-          <div style={{ marginTop: 12 }}>
-            {rec.found_in_excel ? (
-              <FieldTable rows={rec.discrepancies ?? []} rowKey={rec.excel_identifiers?.OwnerID || rec.key?.NewPropertyNo || "UNKNOWN"} />
-            ) : (
-              <FieldTable rows={
-                rec.extracted_from_report && Object.keys(rec.extracted_from_report).length > 0
-                  ? Object.entries(rec.extracted_from_report).map(([k, v]) => ({
-                      field: k,
-                      report_value: v !== null && v !== undefined && v !== "" ? String(v) : "MISSING",
-                      excel_value: "MISSING",
-                      status: "ROW_MISSING_IN_EXCEL"
-                    }))
-                  : [{
-                      field: "(entire row)",
-                      report_value: "Present",
-                      excel_value: "MISSING",
-                      status: "ROW_MISSING_IN_EXCEL"
-                    }]
-              } 
-              rowKey={rec.extracted_from_report?.NewPropertyNo || "UNKNOWN"} />
-            )}
+      <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginBottom: "32px" }}>
+        {result.records?.slice(0, 10).map((rec, i) => (
+          <details key={i} className="glass-card">
+            <summary style={{ cursor: "pointer", padding: "16px", display: "flex", alignItems: "center", gap: "12px", outline: "none" }}>
+              <strong style={{ minWidth: "140px" }}>{rec.key?.NewWardNo} / {rec.key?.NewPropertyNo}</strong>
+              <Badge status={rec.status} />
+              <span style={{ color: "var(--text-muted)", fontSize: "0.9rem", marginLeft: "auto" }}>
+                {rec.total_mismatches ?? 0} issues
+              </span>
+            </summary>
+            
+            <div className="table-container" style={{ border: "none", borderTop: "1px solid var(--surface-border)", borderRadius: "0 0 12px 12px" }}>
+              <FieldTable records={[rec]} />
+            </div>
+          </details>
+        ))}
+        {result.records?.length > 10 && (
+          <div className="glass-card" style={{ padding: "16px", textAlign: "center", color: "var(--text-muted)" }}>
+            Showing first <strong>10</strong> records out of <strong>{result.records.length}</strong>. 
+            <br/>Please click <strong>Export to Excel</strong> to view all records.
           </div>
-        </details>
-      ))}
+        )}
+      </div>
 
       {/* Export Buttons */}
-      <div style={{ marginTop: 24, textAlign: "right", display: "flex", gap: "12px", justifyContent: "flex-end" }}>
-        <button onClick={() => exportDiscrepanciesExcel(result.records || [])}
-          style={{ padding: "8px 16px", background: "#217346", color: "white", border: "none", borderRadius: 4, cursor: "pointer" }}>
-          📥 Export Discrepancies to Excel (.xlsx)
+      <div style={{ display: "flex", gap: "16px", justifyContent: "flex-end" }}>
+        <button className="btn-primary" onClick={() => exportDiscrepanciesExcel(result.records || [])}
+          style={{ background: "linear-gradient(135deg, #10b981, #059669)" }}>
+          📥 Export to Excel
         </button>
-        <button onClick={() => exportDiscrepanciesPDF(result.records || [])}
-          style={{ padding: "8px 16px", background: "#d93025", color: "white", border: "none", borderRadius: 4, cursor: "pointer" }}>
-          📥 Export Discrepancies to PDF
+        <button className="btn-primary" onClick={() => exportDiscrepanciesPDF(result.records || [])}
+          style={{ background: "linear-gradient(135deg, #ef4444, #dc2626)" }}>
+          📥 Export to PDF
         </button>
       </div>
     </section>
   );
 }
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Export Logic
 // ─────────────────────────────────────────────────────────────────────────────
 function formatExportData(records) {
-  const data = [];
-  records.forEach(rec => {
-    // Determine a Row Key (use Owner ID if available, otherwise Property No)
+  return records.map(rec => {
+    const row = {};
     let rowKey = rec.excel_identifiers?.OwnerID;
     if (!rowKey || rowKey === "NOT_FOUND") {
       rowKey = rec.key?.NewPropertyNo || rec.extracted_from_report?.NewPropertyNo || "UNKNOWN";
     }
 
+    row["Owner ID"] = rowKey;
+    row["Ward No"] = rec.key?.NewWardNo || rec.extracted_from_report?.NewWardNo || "";
+    row["Property No"] = rec.key?.NewPropertyNo || rec.extracted_from_report?.NewPropertyNo || "";
+    row["Partition No"] = rec.key?.NewPartitionNo || rec.extracted_from_report?.NewPartitionNo || "";
+    row["Overall Result"] = rec.status;
+
     if (!rec.found_in_excel) {
-      if (rec.extracted_from_report && Object.keys(rec.extracted_from_report).length > 0) {
-        Object.entries(rec.extracted_from_report).forEach(([key, value]) => {
-          data.push({
-            "Row Key": rowKey,
-            "Field": key,
-            "Report Value": value !== null && value !== undefined && value !== "" ? String(value) : "MISSING",
-            "Excel Value": "MISSING",
-            "Issue Type": "ROW_MISSING_IN_EXCEL"
-          });
-        });
-      } else {
-        data.push({
-          "Row Key": rowKey,
-          "Field": "(entire row)",
-          "Report Value": "Present",
-          "Excel Value": "MISSING",
-          "Issue Type": "ROW_MISSING_IN_EXCEL"
+      if (rec.extracted_from_report) {
+        Object.entries(rec.extracted_from_report).forEach(([k, v]) => {
+          if (!["NewWardNo", "NewPropertyNo", "NewPartitionNo"].includes(k)) {
+            row[`${k} (PDF)`] = v !== null && v !== undefined && v !== "" ? String(v) : "MISSING";
+            row[`${k} (Excel)`] = "N/A";
+            row[`${k} (Result)`] = "MISSING_IN_EXCEL";
+          }
         });
       }
-      return;
-    }
-
-    if (rec.discrepancies && rec.discrepancies.length > 0) {
-      rec.discrepancies.forEach(d => {
-        data.push({
-          "Row Key": rowKey,
-          "Field": d.field,
-          "Report Value": d.report_value === null ? "MISSING" : String(d.report_value),
-          "Excel Value": d.excel_value === null ? "MISSING" : String(d.excel_value),
-          "Issue Type": d.status || d.issue_type || "VALUE_MISMATCH"
-        });
-      });
     } else {
-        // If they want to export even perfect matches (usually bulk just exports discrepancies)
-        // We will just skip rows with no discrepancies to match the issue screenshot
+      if (rec.results) {
+        rec.results.forEach(res => {
+          const field = res.field;
+          if (!["NewWardNo", "NewPropertyNo", "NewPartitionNo", "OwnerID"].includes(field)) {
+            row[`${field} (PDF)`] = res.report_value !== null ? String(res.report_value) : "MISSING";
+            row[`${field} (Excel)`] = res.excel_value !== null ? String(res.excel_value) : "MISSING";
+            row[`${field} (Result)`] = res.status;
+          }
+        });
+      }
     }
+    return row;
   });
-  return data;
 }
 
 function exportDiscrepanciesExcel(records) {
   const data = formatExportData(records);
   if (data.length === 0) {
-    alert("No discrepancies to export!");
+    alert("No records to export!");
     return;
   }
   const ws = XLSX.utils.json_to_sheet(data);
-  
-  // Basic column widths
-  ws["!cols"] = [{ wch: 15 }, { wch: 20 }, { wch: 15 }, { wch: 15 }, { wch: 25 }];
-  
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "QC Report");
   XLSX.writeFile(wb, "Report_QC_Results.xlsx");
@@ -424,13 +429,11 @@ function exportDiscrepanciesPDF(records) {
     alert("No discrepancies to export!");
     return;
   }
-
   const doc = new jsPDF();
   doc.setFontSize(16);
   doc.text("QC Discrepancy Report", 14, 15);
   doc.setFontSize(10);
   doc.text(`Generated on: ${new Date().toLocaleString()}`, 14, 22);
-
   const tableColumn = ["Row Key", "Field", "Report Value", "Excel Value", "Issue Type"];
   const tableRows = data.map(item => [
     item["Row Key"],
@@ -439,69 +442,58 @@ function exportDiscrepanciesPDF(records) {
     item["Excel Value"],
     item["Issue Type"]
   ]);
-
   doc.autoTable({
     startY: 28,
     head: [tableColumn],
     body: tableRows,
     theme: 'grid',
-    headStyles: { fillColor: [68, 114, 196] },
+    headStyles: { fillColor: [99, 102, 241] },
     styles: { fontSize: 9 }
   });
-
   doc.save("Report_QC_Results.pdf");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Reusable components
 // ─────────────────────────────────────────────────────────────────────────────
-function SummaryCard({ label, value, color }) {
-  return (
-    <div style={{
-      flex: 1, border: `2px solid ${color}`, borderRadius: 8,
-      padding: "12px 16px", textAlign: "center",
-    }}>
-      <div style={{ fontSize: 22, fontWeight: 700, color }}>{value}</div>
-      <div style={{ fontSize: 12, color: "#555" }}>{label}</div>
-    </div>
-  );
-}
+function FieldTable({ records }) {
+  if (!records || records.length === 0) return null;
+  
+  // Reuse the export formatting to get wide rows for display
+  const data = formatExportData(records);
+  if (data.length === 0) return null;
+  
+  const columns = Object.keys(data[0]);
 
-function FieldTable({ rows, rowKey }) {
-  if (!rows || rows.length === 0) return null;
   return (
     <div style={{ overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+      <table className="modern-table" style={{ whiteSpace: "nowrap" }}>
         <thead>
-          <tr style={{ background: "#4472C4", color: "white" }}>
-            <th style={TH}>Row Key</th>
-            <th style={TH}>Field</th>
-            <th style={TH}>Report Value</th>
-            <th style={TH}>Excel Value</th>
-            <th style={TH}>Issue Type</th>
+          <tr>
+            {columns.map(col => <th key={col}>{col}</th>)}
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, i) => {
-            const isOk = r.status === "MATCH";
-            return (
-              <tr key={i} style={{ background: isOk ? "white" : "#fff0f0" }}>
-                <td style={TD}>{rowKey || "UNKNOWN"}</td>
-                <td style={{ ...TD, fontFamily: "monospace", fontWeight: 500 }}>{r.field}</td>
-                <td style={{ ...TD, color: isOk ? "inherit" : "#c0392b", fontWeight: isOk ? 400 : 600 }}>
-                  {fmt(r.report_value)}
-                </td>
-                <td style={TD}>{fmt(r.excel_value)}</td>
-                <td style={TD}><Badge status={r.status || r.issue_type} /></td>
-              </tr>
-            );
-          })}
+          {data.map((row, i) => (
+            <tr key={i}>
+              {columns.map(col => {
+                const val = row[col];
+                // Use a badge for result columns
+                if (col.includes("Result") || col.includes("Status") || col.includes("Issue Type")) {
+                  return <td key={col}><Badge status={val} /></td>;
+                }
+                return (
+                  <td key={col} style={{ color: val === "MISSING" || val === "N/A" ? "var(--text-muted)" : "inherit" }}>
+                    {fmt(val)}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
   );
 }
 
-const fmt = v => (v === null || v === undefined ? <em style={{ color: "#aaa" }}>—</em> : String(v));
-const TH = { border: "1px solid #3a5fa0", padding: "8px 12px", textAlign: "left" };
-const TD = { border: "1px solid #ddd", padding: "7px 12px" };
+const fmt = v => (v === null || v === undefined ? <em style={{ opacity: 0.5 }}>—</em> : String(v));

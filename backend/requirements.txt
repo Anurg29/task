@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pandas
+openpyxl
+pdfplumber
+python-multipart
+thefuzz
+python-Levenshtein
+websockets
