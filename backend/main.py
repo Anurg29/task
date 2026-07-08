@@ -435,6 +435,28 @@ async def extract_record_from_pdf(pdf_bytes: bytes,
 # ─────────────────────────────────────────────────────────────────────────────
 # QC endpoints
 # ─────────────────────────────────────────────────────────────────────────────
+from pydantic import BaseModel
+import json
+import os
+
+class TypoApproval(BaseModel):
+    pdf_text: str
+    excel_text: str
+
+@app.post("/qc/approve-typo")
+async def approve_typo(typo: TypoApproval):
+    typo_file = os.path.join(os.path.dirname(__file__), "typos.json")
+    typos = {}
+    if os.path.exists(typo_file):
+        try:
+            with open(typo_file, "r") as f:
+                typos = json.load(f)
+        except Exception:
+            pass
+    typos[typo.pdf_text] = typo.excel_text
+    with open(typo_file, "w") as f:
+        json.dump(typos, f, ensure_ascii=False, indent=2)
+    return {"status": "ok", "message": "Typo approved and saved."}
 @app.post("/qc/check-single")
 async def qc_check_single(
     file: UploadFile = File(...),

@@ -194,6 +194,20 @@ def normalize_dataframe(df: pd.DataFrame, col_types: dict = COLUMN_TYPES) -> pd.
 # ---------------------------------------------------------------------------
 # Comparison
 # ---------------------------------------------------------------------------
+import json
+import os
+
+TYPO_FILE = os.path.join(os.path.dirname(__file__), "typos.json")
+
+def load_typos() -> dict:
+    if not os.path.exists(TYPO_FILE):
+        return {}
+    try:
+        with open(TYPO_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
 def values_match(report_val, excel_val, col_type: str):
     """Returns (matched: bool, issue_type: str)."""
     if report_val is None and excel_val is None:
@@ -210,9 +224,17 @@ def values_match(report_val, excel_val, col_type: str):
             return str(report_val) == str(excel_val), "VALUE_MISMATCH"
 
     if col_type == "text":
-        if report_val == excel_val:
+        r_str = str(report_val).strip()
+        e_str = str(excel_val).strip()
+        if r_str == e_str:
             return True, "MATCH"
-        score = fuzz.ratio(str(report_val), str(excel_val))
+            
+        # Check Typo Dictionary
+        typos = load_typos()
+        if typos.get(r_str) == e_str:
+            return True, "MATCH"
+
+        score = fuzz.ratio(r_str, e_str)
         if score >= FUZZY_TEXT_THRESHOLD:
             return False, "MINOR_TYPO"
         return False, "VALUE_MISMATCH"
@@ -223,13 +245,22 @@ def values_match(report_val, excel_val, col_type: str):
 # ---------------------------------------------------------------------------
 # Excel row lookup by composite key (NewWardNo + NewPropertyNo + NewPartitionNo)
 # ---------------------------------------------------------------------------
+def normalize_key(val) -> str | None:
+    if val is None:
+        return None
+    s = str(val)
+    if not s or s.lower() in ("nan", "nat", "none"):
+        return None
+    # Strip everything except alphanumeric, convert to uppercase
+    s = re.sub(r'[^a-zA-Z0-9]', '', s).upper()
+    return s if s else None
+
 def find_excel_row(report_record: dict, excel_df: pd.DataFrame) -> pd.DataFrame:
     """
     Find the Excel row(s) matching:
-      - NewWardNo      (exact string match)
-      - NewPropertyNo  (exact string match, handles float-int from Excel)
-      - NewPartitionNo (None/blank in PDF → match NaN rows in Excel;
-                        a number in PDF   → match that numeric partition)
+      - NewWardNo      (alphanumeric match)
+      - NewPropertyNo  (alphanumeric match)
+      - NewPartitionNo (alphanumeric match)
     """
     mask = pd.Series([True] * len(excel_df), index=excel_df.index)
 
@@ -240,20 +271,17 @@ def find_excel_row(report_record: dict, excel_df: pd.DataFrame) -> pd.DataFrame:
         report_val_raw = report_record.get(key)
 
         if key == "NewPartitionNo":
-            # If PDF has no partition (or it's blank), skip filtering on it
-            # so we don't accidentally fail if the Excel has a partition but PDF doesn't.
-            norm = normalize_value(report_val_raw, "string")
+            norm = normalize_key(report_val_raw)
             if norm is None:
                 continue
             else:
-                # Match numeric partition
-                excel_col_norm = excel_df[key].apply(lambda v: normalize_value(v, "string"))
+                excel_col_norm = excel_df[key].apply(normalize_key)
                 mask &= excel_col_norm == norm
         else:
-            norm = normalize_value(report_val_raw, "string")
+            norm = normalize_key(report_val_raw)
             if norm is None:
-                continue  # skip this key if PDF couldn't extract it
-            excel_col_norm = excel_df[key].apply(lambda v: normalize_value(v, "string"))
+                continue
+            excel_col_norm = excel_df[key].apply(normalize_key)
             mask &= excel_col_norm == norm
 
     return excel_df[mask]

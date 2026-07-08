@@ -5,13 +5,13 @@ import "jspdf-autotable";
 
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-// ─── Status badge colours ───────────────────────────────────────────────────
 const STATUS_COLOR = {
   MATCH:              { bg: "var(--success-bg)", text: "var(--success)" },
   VALUE_MISMATCH:     { bg: "var(--error-bg)", text: "var(--error)" },
   MISSING_IN_REPORT:  { bg: "var(--warning-bg)", text: "var(--warning)" },
   MISSING_IN_EXCEL:   { bg: "rgba(14, 165, 233, 0.2)", text: "#0ea5e9" },
   NOT_FOUND:          { bg: "var(--error-bg)", text: "var(--error)" },
+  MINOR_TYPO:         { bg: "rgba(234, 179, 8, 0.2)", text: "#eab308" }, // Yellow
 };
 
 function Badge({ status }) {
@@ -107,9 +107,9 @@ export default function ReportQC() {
     <div className="app-container animate-fade-in">
       <header className="header animate-fade-in">
         <h1>TaxLedger QC</h1>
-        <p style={{ color: "var(--text-muted)", marginTop: "12px", lineHeight: "1.6" }}>
-          Upload your master Excel database and the PDF report. The system automatically reconciles 
-          all 23 tax columns using <strong>Ward No + Property No</strong> as the primary key.
+        <p style={{ color: "var(--text-muted)", marginTop: "12px", lineHeight: "1.6", maxWidth: "800px", margin: "12px auto 0" }}>
+          An intelligent reconciliation platform designed to cross-verify your master Excel database against PDF tax ledgers. 
+          The system instantly audits all 23 tax heads and property details, automatically detecting numeric discrepancies, missing records, and typographical errors in real-time.
         </p>
       </header>
 
@@ -316,6 +316,13 @@ function SingleResult({ result }) {
 // Bulk result panel
 // ─────────────────────────────────────────────────────────────────────────────
 function BulkResult({ result }) {
+  const [showOnlyMismatches, setShowOnlyMismatches] = useState(false);
+  
+  // Filter records based on toggle
+  const displayedRecords = result.records?.filter(rec => 
+    showOnlyMismatches ? (rec.total_mismatches > 0 || rec.overall_result === "MISSING_IN_EXCEL") : true
+  );
+
   return (
     <section className="animate-fade-in">
       <div className="summary-cards">
@@ -329,8 +336,25 @@ function BulkResult({ result }) {
         </div>
       </div>
 
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "16px" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", color: "var(--text-muted)", fontSize: "0.9rem" }}>
+          <input 
+            type="checkbox" 
+            checked={showOnlyMismatches} 
+            onChange={(e) => setShowOnlyMismatches(e.target.checked)}
+            style={{ width: "16px", height: "16px", accentColor: "var(--primary)" }}
+          />
+          Show Only Mismatches
+        </label>
+      </div>
+
       <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginBottom: "32px" }}>
-        {result.records?.slice(0, 10).map((rec, i) => (
+        {displayedRecords?.length === 0 && showOnlyMismatches && (
+          <div className="glass-card" style={{ padding: "32px", textAlign: "center", color: "var(--success)" }}>
+            ✨ All records are matching perfectly!
+          </div>
+        )}
+        {displayedRecords?.slice(0, 10).map((rec, i) => (
           <details key={i} className="glass-card">
             <summary style={{ cursor: "pointer", padding: "16px", display: "flex", alignItems: "center", gap: "12px", outline: "none" }}>
               <strong style={{ minWidth: "140px" }}>{rec.key?.NewWardNo} / {rec.key?.NewPropertyNo}</strong>
@@ -478,12 +502,54 @@ function FieldTable({ records }) {
             <tr key={i}>
               {columns.map(col => {
                 const val = row[col];
-                // Use a badge for result columns
                 if (col.includes("Result") || col.includes("Status") || col.includes("Issue Type")) {
-                  return <td key={col}><Badge status={val} /></td>;
+                  const isMinorTypo = val === "MINOR_TYPO";
+                  return (
+                    <td key={col} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <Badge status={val} />
+                      {isMinorTypo && (
+                        <button 
+                          className="btn-primary" 
+                          style={{ padding: "4px 8px", fontSize: "0.75rem", background: "linear-gradient(135deg, #10b981, #059669)" }}
+                          onClick={async () => {
+                            const pdfText = row[col.replace(" (Result)", " (PDF)")];
+                            const excelText = row[col.replace(" (Result)", " (Excel)")];
+                            try {
+                              await fetch(`${API_BASE}/qc/approve-typo`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ pdf_text: pdfText, excel_text: excelText })
+                              });
+                              alert(`Approved typo: ${pdfText} -> ${excelText}\nIt will be matched correctly next time!`);
+                            } catch(e) {
+                              alert("Error approving typo.");
+                            }
+                          }}
+                        >
+                          Approve
+                        </button>
+                      )}
+                    </td>
+                  );
                 }
+                
+                let style = { color: val === "MISSING" || val === "N/A" ? "var(--text-muted)" : "inherit" };
+                if (col.endsWith(" (PDF)")) {
+                  const resCol = col.replace(" (PDF)", " (Result)");
+                  if (row[resCol] && !["MATCH", "MINOR_TYPO", "OK"].includes(row[resCol])) {
+                     style.color = "var(--error)";
+                     style.fontWeight = "bold";
+                  }
+                } else if (col.endsWith(" (Excel)")) {
+                  const resCol = col.replace(" (Excel)", " (Result)");
+                  if (row[resCol] && !["MATCH", "MINOR_TYPO", "OK"].includes(row[resCol])) {
+                     style.color = "var(--success)";
+                     style.fontWeight = "bold";
+                  }
+                }
+
                 return (
-                  <td key={col} style={{ color: val === "MISSING" || val === "N/A" ? "var(--text-muted)" : "inherit" }}>
+                  <td key={col} style={style}>
                     {fmt(val)}
                   </td>
                 );
