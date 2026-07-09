@@ -461,11 +461,20 @@ async function exportDiscrepanciesExcel(records) {
         const colHeader = columns[colNumber - 1].header;
         const val = cell.value;
         
+        let statusForCell = null;
         if (colHeader.includes("Result") || colHeader.includes("Status") || colHeader.includes("Issue Type")) {
-           if (val === "MATCH" || val === "OK") {
+          statusForCell = val;
+        } else if (colHeader.includes(" (Excel)")) {
+          statusForCell = rowData[colHeader.replace(" (Excel)", " (Result)")];
+        } else if (colHeader.includes(" (PDF)")) {
+          statusForCell = rowData[colHeader.replace(" (PDF)", " (Result)")];
+        }
+
+        if (statusForCell) {
+           if (statusForCell === "MATCH" || statusForCell === "OK") {
              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD1FAE5' } }; // Light Green
              cell.font = { color: { argb: 'FF065F46' }, bold: true };
-           } else if (val === "MINOR_TYPO") {
+           } else if (statusForCell === "MINOR_TYPO") {
              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF08A' } }; // Light Yellow
              cell.font = { color: { argb: 'FF854D0E' }, bold: true };
            } else {
@@ -487,27 +496,25 @@ function exportDiscrepanciesPDF(records) {
     alert("No discrepancies to export!");
     return;
   }
-  const doc = new jsPDF();
+  const doc = new jsPDF('landscape');
   doc.setFontSize(16);
   doc.text("QC Discrepancy Report", 14, 15);
   doc.setFontSize(10);
   doc.text(`Generated on: ${new Date().toLocaleString()}`, 14, 22);
-  const tableColumn = ["Row Key", "Field", "Report Value", "Excel Value", "Issue Type"];
-  const tableRows = data.map(item => [
-    item["Row Key"],
-    item["Field"],
-    item["Report Value"],
-    item["Excel Value"],
-    item["Issue Type"]
-  ]);
-  doc.autoTable({
-    startY: 28,
-    head: [tableColumn],
-    body: tableRows,
-    theme: 'grid',
-    headStyles: { fillColor: [99, 102, 241] },
-    styles: { fontSize: 9 }
-  });
+  
+  if (data.length > 0) {
+    const tableColumn = Object.keys(data[0]);
+    const tableRows = data.map(item => tableColumn.map(col => item[col]));
+    
+    doc.autoTable({
+      startY: 28,
+      head: [tableColumn],
+      body: tableRows,
+      theme: 'grid',
+      headStyles: { fillColor: [99, 102, 241] },
+      styles: { fontSize: 7, cellPadding: 1, overflow: 'linebreak' }
+    });
+  }
   doc.save("Report_QC_Results.pdf");
 }
 

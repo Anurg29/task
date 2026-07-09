@@ -270,9 +270,14 @@ def find_excel_row(report_record: dict, excel_df: pd.DataFrame) -> pd.DataFrame:
 
         report_val_raw = report_record.get(key)
         norm = normalize_key(report_val_raw)
+        
+        norm_col_name = f"_norm_{key}"
+        if norm_col_name not in excel_df.columns:
+            excel_df[norm_col_name] = excel_df[key].apply(normalize_key)
+            
+        excel_col_norm = excel_df[norm_col_name]
 
         if key == "NewPartitionNo":
-            excel_col_norm = excel_df[key].apply(normalize_key)
             if norm is None:
                 mask &= excel_col_norm.isnull()
             else:
@@ -280,7 +285,6 @@ def find_excel_row(report_record: dict, excel_df: pd.DataFrame) -> pd.DataFrame:
         else:
             if norm is None:
                 continue
-            excel_col_norm = excel_df[key].apply(normalize_key)
             mask &= excel_col_norm == norm
 
     return excel_df[mask]

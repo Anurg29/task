@@ -31,7 +31,9 @@ shared_executor = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global shared_executor
-    shared_executor = ProcessPoolExecutor(max_workers=2)
+    # Safe limits for weak/government PCs: don't spawn too many heavy processes
+    workers = min(3, os.cpu_count() or 2) 
+    shared_executor = ProcessPoolExecutor(max_workers=workers)
     yield
     if shared_executor:
         shared_executor.shutdown(wait=True)
