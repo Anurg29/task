@@ -39,6 +39,18 @@ export default function ReportQC() {
   // Progress tracking
   const [progressMsg, setProgressMsg] = useState("");
   const [progressPct, setProgressPct] = useState(0);
+  const [clientId, setClientId] = useState(null);
+  const [stopping, setStopping] = useState(false);
+
+  async function handleStop() {
+    if (!clientId) return;
+    setStopping(true);
+    try {
+      await fetch(`${API_BASE}/qc/stop/${clientId}`, { method: "POST" });
+    } catch (e) {
+      console.error("Failed to stop:", e);
+    }
+  }
 
   async function runCheck() {
     if (!excelFile || !reportFile) {
@@ -50,16 +62,18 @@ export default function ReportQC() {
     setResult(null);
     setProgressMsg("Starting scan...");
     setProgressPct(0);
+    setStopping(false);
 
     let ws = null;
-    let clientId = null;
+    let newClientId = null;
 
     try {
       if (mode === "bulk") {
-        clientId = Math.random().toString(36).substring(2, 15);
+        newClientId = Math.random().toString(36).substring(2, 15);
+        setClientId(newClientId);
         const wsProtocol = API_BASE.startsWith("https") ? "wss" : "ws";
         const wsHost = API_BASE.replace(/^https?:\/\//, "");
-        ws = new WebSocket(`${wsProtocol}://${wsHost}/ws/progress/${clientId}`);
+        ws = new WebSocket(`${wsProtocol}://${wsHost}/ws/progress/${newClientId}`);
         ws.onmessage = (event) => {
           const data = JSON.parse(event.data);
           const scanned = data.scanned || 0;
@@ -87,7 +101,7 @@ export default function ReportQC() {
         rf.append("partition_no", partitionNo);
       } else if (mode === "bulk") {
         if (targetWards) rf.append("target_wards", targetWards);
-        if (clientId)    rf.append("client_id", clientId);
+        if (newClientId) rf.append("client_id", newClientId);
       }
 
       const endpoint = mode === "single" ? "/qc/check-single" : "/qc/check-bulk";
@@ -177,11 +191,32 @@ export default function ReportQC() {
       )}
 
       <div className="action-row">
-        <button className="btn-primary run-btn" onClick={runCheck} disabled={loading}>
-          {loading ? (
-            <span className="spinner"></span>
-          ) : "▶ Run QC Check"}
-        </button>
+        {loading ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px", width: "100%", maxWidth: "600px", margin: "0 auto" }}>
+            <div style={{ display: "flex", gap: "12px" }}>
+              <button className="btn-primary run-btn" disabled style={{ flex: 1 }}>
+                <span className="spinner"></span> Scanning...
+              </button>
+              {mode === "bulk" && (
+                <button className="btn-primary" onClick={handleStop} disabled={stopping} style={{ background: "var(--danger)" }}>
+                  {stopping ? "Stopping..." : "🛑 Stop & View Results"}
+                </button>
+              )}
+            </div>
+            {mode === "bulk" && progressMsg && (
+              <div style={{ background: "rgba(255,255,255,0.8)", padding: "16px", borderRadius: "12px", textAlign: "center", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.1)" }}>
+                <div style={{ marginBottom: "12px", fontWeight: "600", color: "var(--primary)" }}>{progressMsg}</div>
+                <div style={{ width: "100%", background: "#e5e7eb", borderRadius: "999px", height: "10px", overflow: "hidden" }}>
+                  <div style={{ width: `${progressPct}%`, background: "var(--primary)", height: "100%", transition: "width 0.3s ease" }}></div>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <button className="btn-primary run-btn" onClick={runCheck}>
+            ▶ Run QC Check
+          </button>
+        )}
       </div>
 
       {/* ── Results ── */}

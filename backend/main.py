@@ -62,6 +62,12 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     finally:
         PROGRESS_STORE.pop(client_id, None)
 
+@app.post("/qc/stop/{client_id}")
+async def stop_qc(client_id: str):
+    if client_id in PROGRESS_STORE:
+        PROGRESS_STORE[client_id]["stop"] = True
+    return {"status": "stopping"}
+
 def worker_parse_pages(pdf_path: str, start_page: int, end_page: int, target_wards: list, is_ledger: bool) -> list:
     records = []
     try:
@@ -400,6 +406,10 @@ async def extract_records_from_pdf(pdf_bytes: bytes, target_wards: list[str] | N
             records.extend(res)
             completed_pages += num_pages_in_chunk
             if client_id:
+                current_state = PROGRESS_STORE.get(client_id, {})
+                if current_state.get("stop"):
+                    PROGRESS_STORE[client_id] = {"scanned": total_pages, "total": total_pages, "stop": True}
+                    break
                 PROGRESS_STORE[client_id] = {"scanned": min(completed_pages, total_pages), "total": total_pages}
 
     except Exception as e:
